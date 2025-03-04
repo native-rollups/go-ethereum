@@ -14,6 +14,11 @@ geth:
 	@echo "Done building."
 	@echo "Run \"$(GOBIN)/geth\" to launch geth."
 
+gexecute:
+	$(GORUN) build/ci.go install ./cmd/gexecute
+	@echo "Done building."
+	@echo "Run \"$(GOBIN)/gexecute\" to launch gexecute."
+
 #? all: Build all packages and executables.
 all:
 	$(GORUN) build/ci.go install
