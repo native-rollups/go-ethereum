@@ -95,6 +95,10 @@ var (
 			Description: "Ethereum CLI client.",
 		},
 		{
+			BinaryName:  "gexecute",
+			Description: "Native rollup re-execution client.",
+		},
+		{
 			BinaryName:  "rlpdump",
 			Description: "Developer utility tool that prints RLP structures.",
 		},

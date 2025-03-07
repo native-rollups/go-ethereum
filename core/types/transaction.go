@@ -60,6 +60,12 @@ type Transaction struct {
 	hash atomic.Pointer[common.Hash]
 	size atomic.Uint64
 	from atomic.Pointer[sigCache]
+
+	// cache of details to compute the data availability fee
+	rollupCostData atomic.Value
+
+	// an indicator if this transaction is rejected during block building
+	rejected atomic.Bool
 }
 
 // NewTx creates a new transaction.
@@ -208,6 +214,8 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		inner = new(BlobTx)
 	case SetCodeTxType:
 		inner = new(SetCodeTx)
+	case DepositTxType:
+		inner = new(DepositTx)
 	default:
 		return nil, ErrTxTypeNotSupported
 	}
@@ -305,10 +313,54 @@ func (tx *Transaction) Value() *big.Int { return new(big.Int).Set(tx.inner.value
 // Nonce returns the sender account nonce of the transaction.
 func (tx *Transaction) Nonce() uint64 { return tx.inner.nonce() }
 
+// EffectiveNonce returns the nonce that was actually used as part of transaction execution
+// Returns nil if the effective nonce is not known
+func (tx *Transaction) EffectiveNonce() *uint64 {
+	type txWithEffectiveNonce interface {
+		effectiveNonce() *uint64
+	}
+
+	if itx, ok := tx.inner.(txWithEffectiveNonce); ok {
+		return itx.effectiveNonce()
+	}
+	nonce := tx.inner.nonce()
+	return &nonce
+}
+
 // To returns the recipient address of the transaction.
 // For contract-creation transactions, To returns nil.
 func (tx *Transaction) To() *common.Address {
 	return copyAddressPtr(tx.inner.to())
+}
+
+// SourceHash returns the hash that uniquely identifies the source of the deposit tx,
+// e.g. a user deposit event, or a L1 info deposit included in a specific L2 block height.
+// Non-deposit transactions return a zeroed hash.
+func (tx *Transaction) SourceHash() common.Hash {
+	switch tx.inner.(type) {
+	case *DepositTx:
+		return tx.inner.(*DepositTx).SourceHash
+	case *depositTxWithNonce:
+		return tx.inner.(*depositTxWithNonce).SourceHash
+	}
+	return common.Hash{}
+}
+
+// Mint returns the ETH to mint in the deposit tx.
+// This returns nil if there is nothing to mint, or if this is not a deposit tx.
+func (tx *Transaction) Mint() *big.Int {
+	switch tx.inner.(type) {
+	case *DepositTx:
+		return tx.inner.(*DepositTx).Mint
+	case *depositTxWithNonce:
+		return tx.inner.(*depositTxWithNonce).Mint
+	}
+	return nil
+}
+
+// IsDepositTx returns true if the transaction is a deposit tx type.
+func (tx *Transaction) IsDepositTx() bool {
+	return tx.Type() == DepositTxType
 }
 
 // Cost returns (gas * gasPrice) + (blobGas * blobGasPrice) + value.
@@ -319,6 +371,16 @@ func (tx *Transaction) Cost() *big.Int {
 	}
 	total.Add(total, tx.Value())
 	return total
+}
+
+// Rejected will mark this transaction as rejected.
+func (tx *Transaction) SetRejected() {
+	tx.rejected.Store(true)
+}
+
+// Rejected returns the rejected status of this tx
+func (tx *Transaction) Rejected() bool {
+	return tx.rejected.Load()
 }
 
 // RawSignatureValues returns the V, R, S signature values of the transaction.
@@ -352,6 +414,9 @@ func (tx *Transaction) GasTipCapIntCmp(other *big.Int) int {
 // Note: if the effective gasTipCap is negative, this method returns both error
 // the actual negative value, _and_ ErrGasFeeCapTooLow
 func (tx *Transaction) EffectiveGasTip(baseFee *big.Int) (*big.Int, error) {
+	if tx.Type() == DepositTxType {
+		return new(big.Int), nil
+	}
 	if baseFee == nil {
 		return tx.GasTipCap(), nil
 	}
@@ -421,6 +486,18 @@ func (tx *Transaction) BlobTxSidecar() *BlobTxSidecar {
 	if blobtx, ok := tx.inner.(*BlobTx); ok {
 		return blobtx.Sidecar
 	}
+	return nil
+}
+
+// SetBlobTxSidecar sets the sidecar of a transaction.
+// The sidecar should match the blob-tx versioned hashes, or the transaction will be invalid.
+// This allows tools to easily re-attach blob sidecars to signed transactions that omit the sidecar.
+func (tx *Transaction) SetBlobTxSidecar(sidecar *BlobTxSidecar) error {
+	blobtx, ok := tx.inner.(*BlobTx)
+	if !ok {
+		return fmt.Errorf("not a blob tx, type = %d", tx.Type())
+	}
+	blobtx.Sidecar = sidecar
 	return nil
 }
 
