@@ -149,6 +149,7 @@ var (
 		PragueTime:              nil,
 		OsakaTime:               nil,
 		VerkleTime:              nil,
+		NativeRollupTime:        nil,
 		Ethash:                  new(EthashConfig),
 		Clique:                  nil,
 	}
@@ -203,6 +204,7 @@ var (
 		PragueTime:              nil,
 		OsakaTime:               nil,
 		VerkleTime:              nil,
+		NativeRollupTime:        nil,
 		TerminalTotalDifficulty: big.NewInt(math.MaxInt64),
 		Ethash:                  nil,
 		Clique:                  &CliqueConfig{Period: 0, Epoch: 30000},
@@ -233,6 +235,7 @@ var (
 		PragueTime:              nil,
 		OsakaTime:               nil,
 		VerkleTime:              nil,
+		NativeRollupTime:        nil,
 		TerminalTotalDifficulty: big.NewInt(math.MaxInt64),
 		Ethash:                  new(EthashConfig),
 		Clique:                  nil,
@@ -263,6 +266,7 @@ var (
 		PragueTime:              newUint64(0),
 		OsakaTime:               nil,
 		VerkleTime:              nil,
+		NativeRollupTime:        nil,
 		TerminalTotalDifficulty: big.NewInt(0),
 		Ethash:                  new(EthashConfig),
 		Clique:                  nil,
@@ -297,6 +301,7 @@ var (
 		PragueTime:              nil,
 		OsakaTime:               nil,
 		VerkleTime:              nil,
+		NativeRollupTime:        nil,
 		TerminalTotalDifficulty: big.NewInt(math.MaxInt64),
 		Ethash:                  new(EthashConfig),
 		Clique:                  nil,
@@ -369,11 +374,12 @@ type ChainConfig struct {
 
 	// Fork scheduling was switched from blocks to timestamps here
 
-	ShanghaiTime *uint64 `json:"shanghaiTime,omitempty"` // Shanghai switch time (nil = no fork, 0 = already on shanghai)
-	CancunTime   *uint64 `json:"cancunTime,omitempty"`   // Cancun switch time (nil = no fork, 0 = already on cancun)
-	PragueTime   *uint64 `json:"pragueTime,omitempty"`   // Prague switch time (nil = no fork, 0 = already on prague)
-	OsakaTime    *uint64 `json:"osakaTime,omitempty"`    // Osaka switch time (nil = no fork, 0 = already on osaka)
-	VerkleTime   *uint64 `json:"verkleTime,omitempty"`   // Verkle switch time (nil = no fork, 0 = already on verkle)
+	ShanghaiTime     *uint64 `json:"shanghaiTime,omitempty"`     // Shanghai switch time (nil = no fork, 0 = already on shanghai)
+	CancunTime       *uint64 `json:"cancunTime,omitempty"`       // Cancun switch time (nil = no fork, 0 = already on cancun)
+	PragueTime       *uint64 `json:"pragueTime,omitempty"`       // Prague switch time (nil = no fork, 0 = already on prague)
+	OsakaTime        *uint64 `json:"osakaTime,omitempty"`        // Osaka switch time (nil = no fork, 0 = already on osaka)
+	VerkleTime       *uint64 `json:"verkleTime,omitempty"`       // Verkle switch time (nil = no fork, 0 = already on verkle)
+	NativeRollupTime *uint64 `json:"nativeRollupTime,omitempty"` // Native rollup switch time (nil = no fork, 0 = already on native rollup)
 
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.
@@ -393,6 +399,9 @@ type ChainConfig struct {
 	// always occurs after the genesis block, making this flag irrelevant in
 	// those cases.
 	EnableVerkleAtGenesis bool `json:"enableVerkleAtGenesis,omitempty"`
+
+	// See comment above
+	EnableNativeRollupAtGenesis bool `json:"enableNativeRollupAtGenesis,omitempty"`
 
 	// Various consensus engines
 	Ethash             *EthashConfig       `json:"ethash,omitempty"`
@@ -493,6 +502,9 @@ func (c *ChainConfig) Description() string {
 	}
 	if c.VerkleTime != nil {
 		banner += fmt.Sprintf(" - Verkle:                      @%-10v\n", *c.VerkleTime)
+	}
+	if c.NativeRollupTime != nil {
+		banner += fmt.Sprintf(" - Native Rollup:               @%-10v\n", *c.NativeRollupTime)
 	}
 	return banner
 }
@@ -617,6 +629,11 @@ func (c *ChainConfig) IsVerkle(num *big.Int, time uint64) bool {
 	return c.IsLondon(num) && isTimestampForked(c.VerkleTime, time)
 }
 
+// IsNativeRollup returns whether time is either equal to the Native Rollup fork time or greater.
+func (c *ChainConfig) IsNativeRollup(num *big.Int, time uint64) bool {
+	return c.IsLondon(num) && isTimestampForked(c.NativeRollupTime, time)
+}
+
 // IsVerkleGenesis checks whether the verkle fork is activated at the genesis block.
 //
 // Verkle mode is considered enabled if the verkle fork time is configured,
@@ -629,6 +646,11 @@ func (c *ChainConfig) IsVerkle(num *big.Int, time uint64) bool {
 // those cases.
 func (c *ChainConfig) IsVerkleGenesis() bool {
 	return c.EnableVerkleAtGenesis
+}
+
+// See previous commment
+func (c *ChainConfig) IsNativeRollupGenesis() bool {
+	return c.EnableNativeRollupAtGenesis
 }
 
 // IsEIP4762 returns whether eip 4762 has been activated at given block.
@@ -692,6 +714,7 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 		{name: "pragueTime", timestamp: c.PragueTime, optional: true},
 		{name: "osakaTime", timestamp: c.OsakaTime, optional: true},
 		{name: "verkleTime", timestamp: c.VerkleTime, optional: true},
+		{name: "nativeRollupTime", timestamp: c.NativeRollupTime, optional: true},
 	} {
 		if lastFork.name != "" {
 			switch {
@@ -840,6 +863,9 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	}
 	if isForkTimestampIncompatible(c.VerkleTime, newcfg.VerkleTime, headTimestamp) {
 		return newTimestampCompatError("Verkle fork timestamp", c.VerkleTime, newcfg.VerkleTime)
+	}
+	if isForkTimestampIncompatible(c.NativeRollupTime, newcfg.NativeRollupTime, headTimestamp) {
+		return newTimestampCompatError("Native Rollup fork timestamp", c.NativeRollupTime, newcfg.NativeRollupTime)
 	}
 	return nil
 }
@@ -1015,6 +1041,7 @@ type Rules struct {
 	IsBerlin, IsLondon                                      bool
 	IsMerge, IsShanghai, IsCancun, IsPrague, IsOsaka        bool
 	IsVerkle                                                bool
+	IsNativeRollup                                          bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1026,6 +1053,7 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 	// disallow setting Merge out of order
 	isMerge = isMerge && c.IsLondon(num)
 	isVerkle := isMerge && c.IsVerkle(num, timestamp)
+	isNativeRollup := isMerge && c.IsNativeRollup(num, timestamp)
 	return Rules{
 		ChainID:          new(big.Int).Set(chainID),
 		IsHomestead:      c.IsHomestead(num),
@@ -1046,5 +1074,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsOsaka:          isMerge && c.IsOsaka(num, timestamp),
 		IsVerkle:         isVerkle,
 		IsEIP4762:        isVerkle,
+		IsNativeRollup:   isNativeRollup,
 	}
 }

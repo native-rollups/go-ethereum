@@ -106,6 +106,9 @@ type Header struct {
 
 	// RequestsHash was added by EIP-7685 and is ignored in legacy headers.
 	RequestsHash *common.Hash `json:"requestsHash" rlp:"optional"`
+
+	// ExecuteOutput was added in EIP-XXXX and is ignored in legacy headers.
+	ExecuteOutput []byte `json:"executeOutput" rlp:"optional"`
 }
 
 // field type overrides for gencodec
@@ -120,6 +123,7 @@ type headerMarshaling struct {
 	Hash          common.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
 	BlobGasUsed   *hexutil.Uint64
 	ExcessBlobGas *hexutil.Uint64
+	ExecuteOutput hexutil.Bytes
 }
 
 // Hash returns the block hash of the header, which is simply the keccak256 hash of its
@@ -329,6 +333,10 @@ func CopyHeader(h *Header) *Header {
 		cpy.RequestsHash = new(common.Hash)
 		*cpy.RequestsHash = *h.RequestsHash
 	}
+	if len(h.ExecuteOutput) > 0 {
+		cpy.ExecuteOutput = make([]byte, len(h.ExecuteOutput))
+		copy(cpy.ExecuteOutput, h.ExecuteOutput)
+	}
 	return &cpy
 }
 
@@ -428,6 +436,8 @@ func (b *Block) BlobGasUsed() *uint64 {
 	}
 	return blobGasUsed
 }
+
+func (b *Block) ExecuteOutput() []byte { return common.CopyBytes(b.header.ExecuteOutput) }
 
 // ExecutionWitness returns the verkle execution witneess + proof for a block
 func (b *Block) ExecutionWitness() *ExecutionWitness { return b.witness }

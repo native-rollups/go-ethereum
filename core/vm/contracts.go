@@ -35,6 +35,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/blake2b"
 	"github.com/ethereum/go-ethereum/crypto/bn256"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
+	"github.com/ethereum/go-ethereum/nativerollup/client"
 	"github.com/ethereum/go-ethereum/params"
 	"golang.org/x/crypto/ripemd160"
 )
@@ -141,13 +142,16 @@ var PrecompiledContractsBLS = PrecompiledContractsPrague
 
 var PrecompiledContractsVerkle = PrecompiledContractsPrague
 
+var PrecompiledContractsNativeRollup = PrecompiledContractsPrague
+
 var (
-	PrecompiledAddressesPrague    []common.Address
-	PrecompiledAddressesCancun    []common.Address
-	PrecompiledAddressesBerlin    []common.Address
-	PrecompiledAddressesIstanbul  []common.Address
-	PrecompiledAddressesByzantium []common.Address
-	PrecompiledAddressesHomestead []common.Address
+	PrecompiledAddressesNativeRollup []common.Address
+	PrecompiledAddressesPrague       []common.Address
+	PrecompiledAddressesCancun       []common.Address
+	PrecompiledAddressesBerlin       []common.Address
+	PrecompiledAddressesIstanbul     []common.Address
+	PrecompiledAddressesByzantium    []common.Address
+	PrecompiledAddressesHomestead    []common.Address
 )
 
 func init() {
@@ -169,10 +173,16 @@ func init() {
 	for k := range PrecompiledContractsPrague {
 		PrecompiledAddressesPrague = append(PrecompiledAddressesPrague, k)
 	}
+	for k := range PrecompiledContractsNativeRollup {
+		PrecompiledAddressesNativeRollup = append(PrecompiledAddressesNativeRollup, k)
+	}
 }
 
-func activePrecompiledContracts(rules params.Rules) PrecompiledContracts {
+func activePrecompiledContracts(rules params.Rules, vm *EVM) PrecompiledContracts {
 	switch {
+	case rules.IsNativeRollup:
+		PrecompiledContractsNativeRollup[common.BytesToAddress([]byte{0x12})] = NewExecutePrecompileV1(vm)
+		return PrecompiledContractsNativeRollup
 	case rules.IsVerkle:
 		return PrecompiledContractsVerkle
 	case rules.IsPrague:
@@ -192,12 +202,14 @@ func activePrecompiledContracts(rules params.Rules) PrecompiledContracts {
 
 // ActivePrecompiledContracts returns a copy of precompiled contracts enabled with the current configuration.
 func ActivePrecompiledContracts(rules params.Rules) PrecompiledContracts {
-	return maps.Clone(activePrecompiledContracts(rules))
+	return maps.Clone(activePrecompiledContracts(rules, nil))
 }
 
 // ActivePrecompiles returns the precompile addresses enabled with the current configuration.
 func ActivePrecompiles(rules params.Rules) []common.Address {
 	switch {
+	case rules.IsNativeRollup:
+		return PrecompiledAddressesNativeRollup
 	case rules.IsPrague:
 		return PrecompiledAddressesPrague
 	case rules.IsCancun:
@@ -1181,4 +1193,66 @@ func kZGToVersionedHash(kzg kzg4844.Commitment) common.Hash {
 	h[0] = blobCommitmentVersionKZG
 
 	return h
+}
+
+// executePrecompileV1 implements the Native Rollup "execute" precompile.
+type executePrecompileV1 struct {
+	client   client.Client
+	vm       *EVM
+	bitIndex int // counter to track which bit of ExecuteOutput we're on
+}
+
+// NewExecutePrecompileV1 returns a new executePrecompileV1 instance.
+func NewExecutePrecompileV1(vm *EVM) *executePrecompileV1 {
+	return &executePrecompileV1{
+		client:   client.NewClient(),
+		vm:       vm,
+		bitIndex: 0,
+	}
+}
+
+// RequiredGas computes the required gas: fixed EXECUTE_GAS_COST plus variable cost.
+func (c *executePrecompileV1) RequiredGas(input []byte) uint64 {
+	return 0 // TODO: implement
+}
+
+// Run delegates execution to an external verifier in a background goroutine,
+// then returns the next bit from vm.Context.ExecuteOutput as a single byte.
+func (c *executePrecompileV1) Run(input []byte) ([]byte, error) {
+	go c.runVerifier(input)
+
+	bit, err := c.getNextBit()
+	if err != nil {
+		return []byte{0}, err
+	}
+
+	return []byte{bit}, nil
+}
+
+// runVerifier calls out to the external verifier asynchronously.
+func (c *executePrecompileV1) runVerifier(input []byte) {
+	_, err := c.client.VerifyV1(input, params.ExecuteEndpoint)
+	if err != nil {
+		// TODO: Implement retry logic and/or handle the error in a way that
+		//       ensures we don't attest to an invalid block.
+	}
+}
+
+// getNextBit fetches the bit at c.bitIndex from vm.Context.ExecuteOutput,
+// increments c.bitIndex, and returns 0 or 1.
+func (c *executePrecompileV1) getNextBit() (byte, error) {
+	output := c.vm.Context.ExecuteOutput
+	if len(output) == 0 {
+		return 0, errors.New("empty ExecuteOutput")
+	}
+
+	totalBits := len(output) * 8
+	if c.bitIndex >= totalBits {
+		return 0, errors.New("no more bits in ExecuteOutput")
+	}
+
+	pos := c.bitIndex
+	bit := (output[pos/8] >> (pos % 8)) & 0x01
+	c.bitIndex++
+	return bit, nil
 }
