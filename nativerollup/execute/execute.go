@@ -88,7 +88,7 @@ func DecodeExecutionInput(input []byte) (*ExecutionInput, *ExecutionPayload, err
 func ExecutePrecompile(input []byte, chainConfig *params.ChainConfig, vmConfig *vm.Config) ([]byte, error) {
 	execInput, payload, err := DecodeExecutionInput(input)
 	if err != nil {
-		return nil, err
+		return []byte{0}, err
 	}
 
 	// Construct block using payload data
@@ -104,12 +104,12 @@ func ExecutePrecompile(input []byte, chainConfig *params.ChainConfig, vmConfig *
 	// Execute the block
 	stateRoot, _, err := core.ExecuteStateless(chainConfig, *vmConfig, block, payload.Witness)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute block: %w", err)
+		return []byte{0}, fmt.Errorf("failed to execute block: %w", err)
 	}
 
 	// Validate final state root
 	if stateRoot != execInput.PostStateRoot {
-		return nil, errors.New("final state root mismatch")
+		return []byte{0}, errors.New("final state root mismatch")
 	}
 
 	return []byte{1}, nil
